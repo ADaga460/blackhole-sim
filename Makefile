@@ -1,6 +1,6 @@
 # Compiler and Flags
 CXX      := g++
-CXXFLAGS := -std=c++17 -Wall -Wextra -static
+CXXFLAGS := -std=c++17 -Wall -Wextra -static -w
 DEBUG    := -g
 
 # Include Directories
