@@ -32,7 +32,7 @@ struct AppState {
     float startX = -0.98f;
 
     // One black hole
-    BlackHole bh{ {100,100}, 0.1f, false };
+    BlackHole bh{ {0,0}, 0.1f, false };
 
     // Click-and-hold sizing
     bool charging = false;
@@ -45,8 +45,10 @@ struct AppState {
 // TODO: Implement mouse position -> NDC conversion.
 // Hint: Use framebuffer size, not window size (HiDPI correctness).
 Vec2 screenToNDC(double mx, double my, int fbW, int fbH) {
-    // return { ... };
-    return {0,0};
+    return Vec2{
+        2.0f * static_cast<float>(mx) / static_cast<float>(fbW) - 1.0f,
+        1.0f - 2.0f * static_cast<float>(my) / static_cast<float>(fbH)
+    };
 }
 
 // -------------------- Simulation --------------------
@@ -73,12 +75,61 @@ void recomputeRays(AppState& app) {
 // -------------------- OpenGL helpers --------------------
 // TODO: compileShader, makeProgram, create VAO/VBO, etc.
 // Hint: Follow LearnOpenGL Hello Triangle structure. [web:23]
+static GLuint compileShader(GLenum type, const char* src) {
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, nullptr);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[1024];
+        glGetShaderInfoLog(sh, 1024, nullptr, log);
+        std::cerr << "Shader compile error:\n" << log << "\n";
+    }
+    return sh;
+}
+
+static GLuint makeProgram(const char* vsSrc, const char* fsSrc) {
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc);
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vs);
+    glAttachShader(p, fs);
+    glLinkProgram(p);
+    GLint ok = 0;
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[1024];
+        glGetProgramInfoLog(p, 1024, nullptr, log);
+        std::cerr << "Program link error:\n" << log << "\n";
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return p;
+}
+
+static std::vector<Vec2> makeCircle(Vec2 c, float r, int segments = 100) {
+    std::vector<Vec2> pts;
+    pts.reserve(segments);
+    for (int i = 0; i < segments; ++i) {
+        float a = (float)i / (float)segments * 6.28318530718f;
+        pts.push_back({c.x + std::cos(a) * r, c.y + std::sin(a) * r});
+    }
+    return pts;
+}
+
 
 // -------------------- GLFW callbacks --------------------
 // TODO: framebuffer resize callback
 void framebufferSizeCallback(GLFWwindow* window, int w, int h) {
     // 1) glViewport(0,0,w,h)
     // 2) store w/h into app state (use glfwGetWindowUserPointer)
+    glViewport(0, 0, w, h);
+    AppState* app = static_cast<AppState*>(glfwGetWindowUserPointer(window));
+    if (app) {
+        app->fbW = w;
+        app->fbH = h;
+    }
 }
 
 // TODO: key callback (SPACE resets BH, ESC quits)
@@ -86,29 +137,19 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     // if (action != GLFW_PRESS) return;
     // if (key == GLFW_KEY_SPACE) { clear BH; recomputeRays(); }
     // if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, GLFW_TRUE);
-}
-
-void DrawCircle(float cx, float cy, float r, int num_segments)
-{
-    glBegin(GL_LINE_LOOP);
-    for(int ii = 0; ii < num_segments; ii++)
-    {
-        float theta = 2.0f * 3.1415926f * float(ii) / float(num_segments);//get the current angle
-
-        float x = r * cosf(theta);//calculate the x component
-        float y = r * sinf(theta);//calculate the y component
-
-        glVertex2f(x + cx, y + cy);//output vertex
-
+    if (action != GLFW_PRESS) return;
+    AppState* app = static_cast<AppState*>(glfwGetWindowUserPointer(window));
+    if (!app) return;
+    if (key == GLFW_KEY_SPACE) {
+        app->bh.exists = false;
+        app->charging = false;
+        recomputeRays(*app);
     }
-    //std::cout << "Drew circle at (" << cx << ", " << cy << ") with r=" << r << "\n" << std::endl;
-    glEnd();
+    if (key == GLFW_KEY_ESCAPE) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
 }
 
-void drawBlackHole(const BlackHole& bh) {
-    DrawCircle(bh.pos.x, bh.pos.y, bh.rs, 100);
-    //std::cout << "Drew bh at (" << bh.pos.x << ", " << bh.pos.y << ") with r=" << bh.rs << "\n" << std::endl;
-}
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     if (action == GLFW_PRESS) {
         AppState* app = static_cast<AppState*>(glfwGetWindowUserPointer(window));
@@ -117,10 +158,7 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
             app->chargeStartT = glfwGetTime();
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
-            app->chargePosNDC = Vec2{
-                2.0f * static_cast<float>(mx) / static_cast<float>(app->fbW) - 1.0f,
-                1.0f - 2.0f * static_cast<float>(my) / static_cast<float>(app->fbH)
-            };
+            app->chargePosNDC = screenToNDC(mx, my, app->fbW, app->fbH);
             std::cout << "Charging BH at (" << app->chargePosNDC.x << ", " << app->chargePosNDC.y << ")\n";
         }   
     } else if (action == GLFW_RELEASE) {
@@ -153,6 +191,14 @@ int main() {
         glfwTerminate();
         return -1;
     }
+    
+    glfwMakeContextCurrent(window);
+    
+    if (glewInit() != GLEW_OK) {
+        std::cerr << "Failed to initialize GLEW\n";
+        return -1;
+    }
+    
     // Step 3: setup shaders + VAO/VBO (modern OpenGL). [web:23]
     AppState app;
     glfwSetWindowUserPointer(window, &app);
@@ -165,11 +211,36 @@ int main() {
     // initialize listeners
 
     // Step 5: recomputeRays(app) once at startup
-    glfwMakeContextCurrent(window);
-    if (glewInit() != GLEW_OK) {
-        std::cerr << "Failed to initialize GLEW\n";
-        return -1;
-    }
+    // recomputeRays(app);
+    const char* vsSrc = R"(
+#version 330 core
+layout(location=0) in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+)";
+
+    const char* fsSrc = R"(
+#version 330 core
+uniform vec3 uColor;
+out vec4 FragColor;
+void main() { FragColor = vec4(uColor, 1.0); }
+)";
+
+    GLuint program = makeProgram(vsSrc, fsSrc);
+    GLint uColorLoc = glGetUniformLocation(program, "uColor");
+
+    GLuint vao = 0, vbo = 0;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, 30000 * sizeof(Vec2), nullptr, GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vec2), (void*)0);
+
+    glBindVertexArray(0);
+    
     // Main loop:
     //   glClear
     //   draw each ray polyline (GL_LINE_STRIP)
@@ -178,17 +249,40 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        glfwSwapBuffers(window);
-        glfwPollEvents();
+        
+        glUseProgram(program);
+        glBindVertexArray(vao);
         
         // when the user clicks, draw a black hole at the click position
         // with radius based on how long the mouse button is held down
         if (app.charging) {
             double held = glfwGetTime() - app.chargeStartT;
             float rs = std::clamp(app.rsMin + static_cast<float>(held) * app.rsPerSecond, app.rsMin, app.rsMax);
-            drawBlackHole(BlackHole{ app.chargePosNDC, rs, true });
+            auto circle = makeCircle(app.chargePosNDC, rs, 100);
+            glUniform3f(uColorLoc, 0.4f, 1.0f, 0.2f);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, circle.size() * sizeof(Vec2), circle.data());
+            glDrawArrays(GL_LINE_LOOP, 0, (GLsizei)circle.size());
         }
+        
+        if (app.bh.exists) {
+            auto circle = makeCircle(app.bh.pos, app.bh.rs, 100);
+            glUniform3f(uColorLoc, 1.0f, 0.55f, 0.2f);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, circle.size() * sizeof(Vec2), circle.data());
+            glDrawArrays(GL_LINE_LOOP, 0, (GLsizei)circle.size());
+        }
+        
+        glBindVertexArray(0);
+        
+        glfwSwapBuffers(window);
+        glfwPollEvents();
     }
+    
+    glDeleteBuffers(1, &vbo);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+    glfwDestroyWindow(window);
     glfwTerminate();
 
     return 0;
