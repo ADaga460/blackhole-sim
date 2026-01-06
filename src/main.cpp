@@ -86,28 +86,29 @@ void recomputeRays(AppState& app) {
             Vec2 dir = { 1.0f, 0.0f };
             float stepSize = 0.01f;
             ray.push_back(pos);
-            for (int step = 0; step < 200; ++step) {
+            float dx = 0.004f;
+            for (int step = 0; step < 500 && pos.x < 1.0f; ++step) {
                 Vec2 toBH = { app.bh.pos.x - pos.x, app.bh.pos.y - pos.y };
                 float distSq = toBH.x * toBH.x + toBH.y * toBH.y;
-                if (distSq < app.bh.rs * app.bh.rs) {
-                    // Ray falls into BH
-                    break;
-                }
-                float dist = std::sqrt(distSq);
-                float bendStrength = app.bh.rs / (dist * dist); // simple inverse-square law
-                dir.x += bendStrength * toBH.x / dist;
-                dir.y += bendStrength * toBH.y / dist;
-                // Normalize direction
+                float dist = std::sqrt(distSq + 1e-6f);
+                
+                if (dist <= app.bh.rs) break;
+                
+                float bendStrength = 0.0025f / (distSq + 1e-4f);
+                dir.x += bendStrength * toBH.x;
+                dir.y += bendStrength * toBH.y;
+                
                 float dirLen = std::sqrt(dir.x * dir.x + dir.y * dir.y);
                 dir.x /= dirLen;
                 dir.y /= dirLen;
-                // Step forward
-                pos.x += dir.x * stepSize;
-                pos.y += dir.y * stepSize;
+                
+                float vx = std::max(0.05f, dir.x);
+                float actualStep = dx / vx;
+                pos.x += dir.x * actualStep;
+                pos.y += dir.y * actualStep;
+                
                 ray.push_back(pos);
-                if (pos.x > 1.0f || pos.y < -1.0f || pos.y > 1.0f) {
-                    break; // Exit if out of bounds
-                }
+                if (pos.y < -1.2f || pos.y > 1.2f) break;
             }
         }
         app.rays.push_back(ray);
