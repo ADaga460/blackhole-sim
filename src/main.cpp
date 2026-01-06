@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <iostream>
 
+// mingw32-make SHELL=cmd.exe
+
 // -------------------- Data types --------------------
 struct Vec2 {
     float x, y;
@@ -66,6 +68,50 @@ void recomputeRays(AppState& app) {
     //
     //   if (!bh.exists) push_back straight polyline
     //   else push_back bent polyline
+    app.rays.clear();
+    app.rays.reserve(app.rayCount);
+    for (int i = 0; i < app.rayCount; ++i) {
+        float t = static_cast<float>(i) / static_cast<float>(app.rayCount - 1);
+        float y = app.yMin + t * (app.yMax - app.yMin);
+        Vec2 start = { app.startX, y };
+
+        std::vector<Vec2> ray;
+        if (!app.bh.exists) {
+            // Straight ray
+            ray.push_back(start);
+            ray.push_back({ 1.0f, y });
+        } else {
+            // Bent ray (simple approximation)
+            Vec2 pos = start;
+            Vec2 dir = { 1.0f, 0.0f };
+            float stepSize = 0.01f;
+            ray.push_back(pos);
+            for (int step = 0; step < 200; ++step) {
+                Vec2 toBH = { app.bh.pos.x - pos.x, app.bh.pos.y - pos.y };
+                float distSq = toBH.x * toBH.x + toBH.y * toBH.y;
+                if (distSq < app.bh.rs * app.bh.rs) {
+                    // Ray falls into BH
+                    break;
+                }
+                float dist = std::sqrt(distSq);
+                float bendStrength = app.bh.rs / (dist * dist); // simple inverse-square law
+                dir.x += bendStrength * toBH.x / dist;
+                dir.y += bendStrength * toBH.y / dist;
+                // Normalize direction
+                float dirLen = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+                dir.x /= dirLen;
+                dir.y /= dirLen;
+                // Step forward
+                pos.x += dir.x * stepSize;
+                pos.y += dir.y * stepSize;
+                ray.push_back(pos);
+                if (pos.x > 1.0f || pos.y < -1.0f || pos.y > 1.0f) {
+                    break; // Exit if out of bounds
+                }
+            }
+        }
+        app.rays.push_back(ray);
+    }
 }
 
 // TODO (optional): Write helpers like:
@@ -211,7 +257,7 @@ int main() {
     // initialize listeners
 
     // Step 5: recomputeRays(app) once at startup
-    // recomputeRays(app);
+    recomputeRays(app);
     const char* vsSrc = R"(
 #version 330 core
 layout(location=0) in vec2 aPos;
@@ -272,6 +318,15 @@ void main() { FragColor = vec4(uColor, 1.0); }
             glBufferSubData(GL_ARRAY_BUFFER, 0, circle.size() * sizeof(Vec2), circle.data());
             glDrawArrays(GL_LINE_LOOP, 0, (GLsizei)circle.size());
         }
+
+        // Draw rays
+        glUniform3f(uColorLoc, 0.8f, 0.8f, 0.8f);
+        for (const auto& ray : app.rays) {
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, ray.size() * sizeof(Vec2), ray.data());
+            glDrawArrays(GL_LINE_STRIP, 0, (GLsizei)ray.size());
+        }
+
         
         glBindVertexArray(0);
         
