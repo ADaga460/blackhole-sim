@@ -58,62 +58,95 @@ Vec2 screenToNDC(double mx, double my, int fbW, int fbH) {
 // - If no BH: straight rays.
 // - If BH exists: bent rays (marching).
 void recomputeRays(AppState& app) {
-    // app.rays.clear();
-    // app.rays.reserve(app.rayCount);
-
-    // For each ray i:
-    //   float t = i/(rayCount-1)
-    //   float y = lerp(yMin, yMax, t)
-    //   Vec2 start = {startX, y}
-    //
-    //   if (!bh.exists) push_back straight polyline
-    //   else push_back bent polyline
     app.rays.clear();
     app.rays.reserve(app.rayCount);
+    
     for (int i = 0; i < app.rayCount; ++i) {
-        float t = static_cast<float>(i) / static_cast<float>(app.rayCount - 1);
+        float t = (app.rayCount == 1) ? 0.5f : static_cast<float>(i) / static_cast<float>(app.rayCount - 1);
         float y = app.yMin + t * (app.yMax - app.yMin);
         Vec2 start = { app.startX, y };
-
+        
         std::vector<Vec2> ray;
+        
         if (!app.bh.exists) {
-            // Straight ray
             ray.push_back(start);
             ray.push_back({ 1.0f, y });
         } else {
-            // Bent ray (simple approximation)
-            Vec2 pos = start;
-            Vec2 dir = { 1.0f, 0.0f };
-            float stepSize = 0.01f;
-            ray.push_back(pos);
-            float dx = 0.004f;
-            for (int step = 0; step < 500 && pos.x < 1.0f; ++step) {
-                Vec2 toBH = { app.bh.pos.x - pos.x, app.bh.pos.y - pos.y };
-                float distSq = toBH.x * toBH.x + toBH.y * toBH.y;
-                float dist = std::sqrt(distSq + 1e-6f);
+            Vec2 toBH = { app.bh.pos.x - start.x, app.bh.pos.y - start.y };
+            float r0 = std::sqrt(toBH.x * toBH.x + toBH.y * toBH.y);
+            r0 = std::max(r0, 1e-3f);
+            
+            float phi0 = std::atan2(toBH.y, toBH.x);
+            
+            Vec2 rayDir = { 1.0f, (t - 0.5f) * 0.06f };
+            float dirLen = std::sqrt(rayDir.x * rayDir.x + rayDir.y * rayDir.y);
+            rayDir.x /= dirLen;
+            rayDir.y /= dirLen;
+            
+            float c = std::cos(phi0), s = std::sin(phi0);
+            Vec2 e_r = {c, s};
+            Vec2 e_phi = {-s, c};
+            
+            float vr = rayDir.x * e_r.x + rayDir.y * e_r.y;
+            float vphi = rayDir.x * e_phi.x + rayDir.y * e_phi.y;
+            
+            const float minVphi = 0.2f;
+            if (std::fabs(vphi) < minVphi) vphi = (vphi < 0.0f ? -minVphi : minVphi);
+            
+            float u = 1.0f / r0;
+            float w = -u * (vr / vphi);
+            float phi = phi0;
+            
+            const float dphi = 0.006f;
+            const int maxSteps = 12000;
+            
+            ray.push_back(start);
+            
+            for (int step = 0; step < maxSteps; ++step) {
+                float u0 = u, w0 = w;
                 
-                if (dist <= app.bh.rs) break;
+                auto f = [&](float u_val) -> float {
+                    return 1.5f * app.bh.rs * u_val * u_val - u_val;
+                };
                 
-                float bendStrength = 0.0025f / (distSq + 1e-4f);
-                dir.x += bendStrength * toBH.x;
-                dir.y += bendStrength * toBH.y;
+                float k1u = w0;
+                float k1w = f(u0);
                 
-                float dirLen = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-                dir.x /= dirLen;
-                dir.y /= dirLen;
+                float k2u = w0 + 0.5f * dphi * k1w;
+                float k2w = f(u0 + 0.5f * dphi * k1u);
                 
-                float vx = std::max(0.05f, dir.x);
-                float actualStep = dx / vx;
-                pos.x += dir.x * actualStep;
-                pos.y += dir.y * actualStep;
+                float k3u = w0 + 0.5f * dphi * k2w;
+                float k3w = f(u0 + 0.5f * dphi * k2u);
                 
-                ray.push_back(pos);
-                if (pos.y < -1.2f || pos.y > 1.2f) break;
+                float k4u = w0 + dphi * k3w;
+                float k4w = f(u0 + dphi * k3u);
+                
+                u = u0 + (dphi / 6.0f) * (k1u + 2*k2u + 2*k3u + k4u);
+                w = w0 + (dphi / 6.0f) * (k1w + 2*k2w + 2*k3w + k4w);
+                phi += dphi;
+                
+                if (!(u > 0.0f) || !std::isfinite(u) || !std::isfinite(w)) break;
+                if (u >= (1.0f / app.bh.rs)) break;
+                
+                float R = 1.0f / u;
+                Vec2 p = { app.bh.pos.x + R * std::cos(phi),
+                          app.bh.pos.y + R * std::sin(phi) };
+                
+                if (p.x >= 1.0f) {
+                    ray.push_back({1.0f, p.y});
+                    break;
+                }
+                
+                if (p.y < -1.2f || p.y > 1.2f || p.x < -1.5f) break;
+                
+                if (step % 3 == 0) ray.push_back(p);
             }
         }
+        
         app.rays.push_back(ray);
     }
 }
+
 
 // TODO (optional): Write helpers like:
 // std::vector<Vec2> makeStraightRay(...)
