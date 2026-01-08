@@ -72,81 +72,83 @@ void recomputeRays(AppState& app) {
             ray.push_back(start);
             ray.push_back({ 1.0f, y });
         } else {
-            Vec2 toBH = { app.bh.pos.x - start.x, app.bh.pos.y - start.y };
-            float r0 = std::sqrt(toBH.x * toBH.x + toBH.y * toBH.y);
-            r0 = std::max(r0, 1e-3f);
+            Vec2 relPos = { start.x - app.bh.pos.x, start.y - app.bh.pos.y };
+            float r = std::sqrt(relPos.x * relPos.x + relPos.y * relPos.y);
+            r = std::max(r, app.bh.rs * 1.01f);
             
-            float phi0 = std::atan2(toBH.y, toBH.x);
+            // Initial angle
+            float phi = std::atan2(relPos.y, relPos.x);
             
-            Vec2 rayDir = { 1.0f, (t - 0.5f) * 0.06f };
-            float dirLen = std::sqrt(rayDir.x * rayDir.x + rayDir.y * rayDir.y);
-            rayDir.x /= dirLen;
-            rayDir.y /= dirLen;
+            Vec2 vel = { 1.0f, (t - 0.5f) * 0.1f };
+            float vMag = std::sqrt(vel.x * vel.x + vel.y * vel.y);
+            vel.x /= vMag;
+            vel.y /= vMag;
             
-            float c = std::cos(phi0), s = std::sin(phi0);
-            Vec2 e_r = {c, s};
-            Vec2 e_phi = {-s, c};
+            float cosPhi = std::cos(phi), sinPhi = std::sin(phi);
+            Vec2 e_r = { cosPhi, sinPhi };
+            Vec2 e_phi = { -sinPhi, cosPhi };
             
-            float vr = rayDir.x * e_r.x + rayDir.y * e_r.y;
-            float vphi = rayDir.x * e_phi.x + rayDir.y * e_phi.y;
+            float v_r = vel.x * e_r.x + vel.y * e_r.y;
+            float v_phi = vel.x * e_phi.x + vel.y * e_phi.y;
             
-            const float minVphi = 0.2f;
-            if (std::fabs(vphi) < minVphi) vphi = (vphi < 0.0f ? -minVphi : minVphi);
+            float b = std::fabs(r * v_phi);
+            if (b < 0.01f) b = 0.01f;
             
-            float u = 1.0f / r0;
-            float w = -u * (vr / vphi);
-            float phi = phi0;
+            float phi_direction = (v_phi >= 0) ? 1.0f : -1.0f;
             
-            const float dphi = 0.006f;
+            float u = 1.0f / r;
+            
+            // du/dφ = -v_r / |L| * sign(L)
+            float dudphi = -v_r / b * phi_direction;
+            
+            const float dPhi = 0.01f * phi_direction; // Step
             const int maxSteps = 12000;
             
             ray.push_back(start);
             
             for (int step = 0; step < maxSteps; ++step) {
-                float u0 = u, w0 = w;
+                // Schwarzschild geodesic eq
+                // d²u/dφ² + u = (3/2)*Rs*u²
+                auto f_u = [](float u, float du) { return du; };
+                auto f_du = [&](float u, float du) { return -u + 1.5f * app.bh.rs * u * u; };
                 
-                auto f = [&](float u_val) -> float {
-                    return 1.5f * app.bh.rs * u_val * u_val - u_val;
+                // RK4
+                float k1u = f_u(u, dudphi);
+                float k1du = f_du(u, dudphi);
+                
+                float k2u = f_u(u + 0.5f*dPhi*k1u, dudphi + 0.5f*dPhi*k1du);
+                float k2du = f_du(u + 0.5f*dPhi*k1u, dudphi + 0.5f*dPhi*k1du);
+                
+                float k3u = f_u(u + 0.5f*dPhi*k2u, dudphi + 0.5f*dPhi*k2du);
+                float k3du = f_du(u + 0.5f*dPhi*k2u, dudphi + 0.5f*dPhi*k2du);
+                
+                float k4u = f_u(u + dPhi*k3u, dudphi + dPhi*k3du);
+                float k4du = f_du(u + dPhi*k3u, dudphi + dPhi*k3du);
+                
+                u += (dPhi/6.0f) * (k1u + 2*k2u + 2*k3u + k4u);
+                dudphi += (dPhi/6.0f) * (k1du + 2*k2du + 2*k3du + k4du);
+                phi += dPhi;
+                if (u <= 0.0f || !std::isfinite(u) || !std::isfinite(dudphi)) break;
+                if (u >= 1.0f / app.bh.rs) break; // Event horizon
+                
+                r = 1.0f / u;
+                Vec2 pos = {
+                    app.bh.pos.x + r * std::cos(phi),
+                    app.bh.pos.y + r * std::sin(phi)
                 };
-                
-                float k1u = w0;
-                float k1w = f(u0);
-                
-                float k2u = w0 + 0.5f * dphi * k1w;
-                float k2w = f(u0 + 0.5f * dphi * k1u);
-                
-                float k3u = w0 + 0.5f * dphi * k2w;
-                float k3w = f(u0 + 0.5f * dphi * k2u);
-                
-                float k4u = w0 + dphi * k3w;
-                float k4w = f(u0 + dphi * k3u);
-                
-                u = u0 + (dphi / 6.0f) * (k1u + 2*k2u + 2*k3u + k4u);
-                w = w0 + (dphi / 6.0f) * (k1w + 2*k2w + 2*k3w + k4w);
-                phi += dphi;
-                
-                if (!(u > 0.0f) || !std::isfinite(u) || !std::isfinite(w)) break;
-                if (u >= (1.0f / app.bh.rs)) break;
-                
-                float R = 1.0f / u;
-                Vec2 p = { app.bh.pos.x + R * std::cos(phi),
-                          app.bh.pos.y + R * std::sin(phi) };
-                
-                if (p.x >= 1.0f) {
-                    ray.push_back({1.0f, p.y});
+                if (pos.x >= 1.0f) {
+                    ray.push_back({1.0f, pos.y});
                     break;
                 }
+                if (pos.y < -1.2f || pos.y > 1.2f || pos.x < -1.5f) break;
                 
-                if (p.y < -1.2f || p.y > 1.2f || p.x < -1.5f) break;
-                
-                if (step % 3 == 0) ray.push_back(p);
+                if (step % 4 == 0) ray.push_back(pos);
             }
         }
         
         app.rays.push_back(ray);
     }
 }
-
 
 // TODO (optional): Write helpers like:
 // std::vector<Vec2> makeStraightRay(...)
